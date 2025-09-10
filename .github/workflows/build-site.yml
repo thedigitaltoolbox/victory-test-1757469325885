@@ -1,0 +1,256 @@
+name: Build Site (copy sections + generate pages)
+
+on:
+  workflow_dispatch:
+    inputs:
+      spec_json:
+        description: SiteSpec JSON (base64 encoded)
+        required: true
+        type: string
+  # optional: lets you trigger via repository_dispatch too
+  repository_dispatch:
+    types: [build-site]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout target repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Install deps
+        run: |
+          echo "Installing all dependencies..."
+          npm install --verbose
+          echo "Installed packages:"
+          npm list --depth=0
+          echo "Verifying vite is available..."
+          npx vite --version
+          echo "Checking if build script exists..."
+          npm run build --dry-run || echo "Build script verification failed"
+
+      - name: Checkout blocks-lib
+        uses: actions/checkout@v4
+        with:
+          repository: thedigitaltoolbox/blocks-lib
+          token: ${{ secrets.BLOCKS_LIB_TOKEN }}   # org secret
+          path: blocks-lib
+
+      - name: Write SiteSpec
+        shell: bash
+        run: |
+          # Use input if provided, otherwise use default example
+          if [ -n "${{ github.event.inputs.spec_json }}" ]; then
+            # Decode base64 input and write to spec.json
+            echo '${{ github.event.inputs.spec_json }}' | base64 -d > temp_spec.json
+            # Validate JSON and write to spec.json
+            if jq empty temp_spec.json 2>/dev/null; then
+              mv temp_spec.json spec.json
+              echo "✅ Valid SiteSpec JSON provided and decoded"
+            else
+              echo "❌ Invalid JSON provided, using fallback template"
+              rm -f temp_spec.json
+              # Fall through to default template
+            fi
+          fi
+          
+          # Use default template if no valid input provided
+          if [ ! -f spec.json ]; then
+            cat > spec.json << 'EOF'
+          {
+            "brand": {
+              "name": "Your Company Name"
+            },
+            "nav": [
+              {
+                "name": "Home",
+                "href": "home"
+              },
+              {
+                "name": "About",
+                "href": "about"
+              },
+              {
+                "name": "Services",
+                "href": "services"
+              },
+              {
+                "name": "Contact",
+                "href": "contact"
+              }
+            ],
+            "pages": [
+              {
+                "slug": "home",
+                "title": "Welcome",
+                "sections": [
+                  {
+                    "component": "Section",
+                    "variant": "WithBackgroundImage",
+                    "props": {
+                      "headline": "Your Headline Here",
+                      "subhead": "Your compelling subheadline goes here.",
+                      "imageUrl": "https://example.com/hero-image.jpg",
+                      "primaryCta": {
+                        "text": "Get Started",
+                        "href": "/contact"
+                      },
+                      "secondaryCta": {
+                        "text": "Learn More",
+                        "href": "/about"
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "slug": "about",
+                "title": "About Us",
+                "sections": [
+                  {
+                    "component": "Section",
+                    "variant": "SimpleSideBySide",
+                    "props": {
+                      "headline": "About Our Company",
+                      "subhead": "Tell your story and what makes you unique.",
+                      "imageUrl": "https://example.com/about-image.jpg",
+                      "primaryCta": {
+                        "text": "Contact Us",
+                        "href": "/contact"
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "slug": "services",
+                "title": "Our Services",
+                "sections": [
+                  {
+                    "component": "Section",
+                    "variant": "FeatureGrid",
+                    "props": {
+                      "headline": "What We Offer",
+                      "subhead": "Describe your services and solutions.",
+                      "features": [
+                        {
+                          "title": "Service 1",
+                          "description": "Description of your first service.",
+                          "icon": "CheckIcon"
+                        },
+                        {
+                          "title": "Service 2",
+                          "description": "Description of your second service.",
+                          "icon": "CheckIcon"
+                        },
+                        {
+                          "title": "Service 3",
+                          "description": "Description of your third service.",
+                          "icon": "CheckIcon"
+                        }
+                      ]
+                    }
+                  }
+                ]
+              },
+              {
+                "slug": "contact",
+                "title": "Contact Us",
+                "sections": [
+                  {
+                    "component": "Section",
+                    "variant": "ContactForm",
+                    "props": {
+                      "headline": "Get In Touch",
+                      "subhead": "We'd love to hear from you. Send us a message.",
+                      "form": {
+                        "fields": [
+                          {
+                            "name": "name",
+                            "type": "text",
+                            "label": "Full Name",
+                            "required": true
+                          },
+                          {
+                            "name": "email",
+                            "type": "email",
+                            "label": "Email Address",
+                            "required": true
+                          },
+                          {
+                            "name": "message",
+                            "type": "textarea",
+                            "label": "Message",
+                            "required": true
+                          }
+                        ],
+                        "submitText": "Send Message"
+                      },
+                      "contactInfo": {
+                        "phone": "(555) 123-4567",
+                        "email": "hello@yourcompany.com",
+                        "address": "123 Main Street, City, State 12345"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+          EOF
+          fi
+
+      - name: Apply SiteSpec
+        run: node scripts/apply-sitespec.mjs spec.json ./blocks-lib ./src
+
+      - name: Verify SiteSpec Applied
+        run: |
+          echo "Verifying SiteSpec was applied correctly..."
+          if [ -d "src" ]; then
+            echo "✅ src directory exists"
+            echo "Generated src files:"
+            find src -name "*.tsx" -o -name "*.ts" -o -name "*.jsx" -o -name "*.js" | head -10
+            echo "✅ SiteSpec application complete - Netlify will handle the build"
+          else
+            echo "❌ src directory missing"
+            ls -la
+            exit 1
+          fi
+
+      - name: Commit generated files
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: apply sitespec (Netlify will build)"
+          file_pattern: |
+            src/**
+            public/**
+            package.json
+            tailwind.config.js
+            postcss.config.js
+            vite.config.ts
+
+      - name: Trigger Netlify deployment
+        if: github.event_name == 'workflow_dispatch' || github.event_name == 'repository_dispatch'
+        run: |
+          # Netlify will automatically detect the new commit and build the site
+          echo "✅ SiteSpec applied and committed successfully!"
+          echo "🚀 Netlify will now automatically:"
+          echo "   1. Detect the new commit"
+          echo "   2. Run 'npm run build' to create dist/"
+          echo "   3. Deploy the built site"
+          echo ""
+          echo "Repository: ${{ github.repository }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "Netlify will build from src/ and deploy dist/"

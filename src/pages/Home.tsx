@@ -1,0 +1,1 @@
+export default function Home(){return(<main className="min-h-screen grid place-items-center p-8"><div className="max-w-xl text-center space-y-4"><h1 className="text-3xl font-bold">AI Site Starter</h1><p className="text-slate-600">The workflow will copy sections from blocks-lib and generate pages.</p></div></main>);}
